@@ -1,0 +1,27 @@
+{
+  "name": "npblob",
+  "version": "0.0.1",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "build": "bun build",
+    "lint": "bun run lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "bun run test"
+  },
+  "prettier": {
+    "tabWidth": 2,
+    "semi": true,
+    "singleQuote": false,
+    "trailingComma": "es5"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "prettier": "^3.1.1",
+    "vitest": "^1.0.4"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
