@@ -1,0 +1,16 @@
+.eslintignore   
+.eslintrc       
+.lintstagedrc   
+.prettierignore 
+.prettierrc     
+.stylelintignore
+.stylelintrc    
+biome.json
+bun.lockb
+bunfig.toml
+index.html      
+tsconfig.json   
+src
+test
+vite.config.ts
+*.tgz
