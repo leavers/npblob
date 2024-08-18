@@ -152,26 +152,26 @@ class IncompleteChunksError extends Error {}
 const splitChunks = (chunks: Array<Uint8Array>, length: number): Uint8Array => {
   const poppedChunks: Array<Uint8Array> = [];
   const chunksSize = chunks.length;
-  let accumelatedLength = 0;
+  let accumulatedLength = 0;
   let splitChunksAt = 0;
   for (let i = 0; i < chunksSize; ++i) {
     const chunk = chunks[i];
     const chunkLength = chunk.length;
-    if (accumelatedLength + chunkLength <= length) {
+    if (accumulatedLength + chunkLength <= length) {
       poppedChunks.push(chunk);
-      accumelatedLength += chunkLength;
+      accumulatedLength += chunkLength;
       splitChunksAt = i + 1;
     } else {
-      const splitChunkAt = length - accumelatedLength;
+      const splitChunkAt = length - accumulatedLength;
       if (splitChunkAt > 0) {
         poppedChunks.push(chunk.slice(0, splitChunkAt));
         chunks[i] = chunk.slice(splitChunkAt);
-        accumelatedLength = length;
+        accumulatedLength = length;
       }
       break;
     }
   }
-  if (accumelatedLength < length) {
+  if (accumulatedLength < length) {
     throw new IncompleteChunksError("Unexpected end of stream");
   }
   if (splitChunksAt > 0) {
