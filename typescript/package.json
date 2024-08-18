@@ -2,16 +2,17 @@
 	"name": "npblob",
 	"version": "0.0.1",
 	"type": "module",
-	"main": "./dist/index.cjs",
-	"module": "./dist/index.js",
-	"types": "./dist/index.d.ts",
+	"main": "./dist/npblob.cjs.js",
+	"module": "./dist/npblob.es.js",
+	"types": "./dist/npblob.d.ts",
 	"exports": {
 		".": {
-			"types": "./dist/index.d.ts",
-			"require": "./dist/index.cjs",
-			"import": "./dist/index.js"
+			"types": "./dist/npblob.d.ts",
+			"require": "./dist/npblob.cjs.js",
+			"import": "./dist/npblob.es.js"
 		}
 	},
+	"files": ["dist"],
 	"scripts": {
 		"build": "rimraf dist && tsc && vite build",
 		"test": "vitest",
@@ -21,7 +22,6 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.8.3",
-		"@types/bun": "^1.1.6",
 		"@types/node": "^22.4.0",
 		"rimraf": "^6.0.1",
 		"typescript": "^5.5.4",

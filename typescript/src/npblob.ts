@@ -270,10 +270,12 @@ const parseFromUint8ArrayChunks = (
       tempChunks.push(chunk);
       const arr =
         Object.getPrototypeOf(ArrayType) === TypedArray
-          ? new (ArrayType as { new (buffer: ArrayBuffer): number[] })(
+          ? new (ArrayType as { new (buffer: ArrayBufferLike): number[] })(
               chunk.buffer,
             )
-          : (ArrayType as { (buffer: ArrayBuffer): number[] })(chunk.buffer);
+          : (ArrayType as { (buffer: ArrayBufferLike): number[] })(
+              chunk.buffer,
+            );
 
       if (chunks.length === 0) {
         result.push([

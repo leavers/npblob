@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NDArray, NDArrayAndExtra, decode, encode, stream } from "../src/index";
+import { NDArrayAndExtra, decode, encode, stream } from "../src/npblob";
 import { ReadableStream } from "stream/web";
 
 /**
