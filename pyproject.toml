@@ -2,8 +2,8 @@
 name = "npblob"
 description = "Transfer numpy array between Python and JavaScript"
 authors = [
-  { name = "Leavers" },
-  { name = "Leavers", email = "leavers930@gmail.com" },
+    { name = "Leavers" },
+    { name = "Leavers", email = "leavers930@gmail.com" },
 ]
 requires-python = ">=3.8"
 readme = "README.md"
@@ -28,7 +28,9 @@ classifiers = [
   "Topic :: Utilities",
 ]
 keywords = ["data", "deep learning", "javascript", "ndarray", "numpy", "tensor"]
-dependencies = ["numpy"]
+dependencies = [
+    "numpy",
+]
 dynamic = ["version"]
 
 [project.urls]
@@ -44,12 +46,13 @@ build-backend = "pdm.backend"
 distribution = true
 
 [tool.pdm.build]
+package-dir = "python"
 includes = ["npblob"]
 excludes = ["examples", "tests"]
 
 [tool.pdm.version]
 source = "file"
-path = "npblob/__init__.py"
+path = "python/npblob/__init__.py"
 
 [tool.pdm.dev-dependencies]
 dev = [
