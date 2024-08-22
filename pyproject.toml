@@ -1,0 +1,89 @@
+[project]
+name = "npblob"
+description = "Transfer numpy array between Python and JavaScript"
+authors = [
+    { name = "Leavers" },
+    { name = "Leavers", email = "leavers930@gmail.com" },
+]
+requires-python = ">=3.8"
+readme = "README.md"
+license = { text = "MIT" }
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: JavaScript",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+]
+keywords = ["data", "deep learning", "javascript", "ndarray", "numpy", "tensor"]
+dependencies = ["numpy"]
+dynamic = ["version"]
+
+[project.urls]
+homepage = "https://github.com/leavers/npblob"
+# documentation = "URL of documentation"
+# changelog = "URL of changelog"
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.build]
+package-dir = "python"
+includes = ["python/npblob"]
+excludes = ["examples", "tests", "python/examples", "python/tests"]
+
+[tool.pdm.version]
+source = "file"
+path = "python/npblob/__init__.py"
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "autoflake>=2.3.1",
+    "mypy>=1.11.1",
+    "nox>=2024.4.15",
+    "pytest>=8.3.2",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.6.1",
+]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+source = ["npblob"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: nocover"]
+
+[tool.autoflake]
+in-place = true
+recursive = true
+remove-all-unused-imports = true
+ignore-init-module-imports = true
+remove-duplicate-keys = true
+remove-unused-variables = true
+
+[tool.mypy]
+check_untyped_defs = true
+ignore_missing_imports = true
+show_error_codes = true
+
+[tool.ruff]
+target-version = "py38"
+line-length = 88
