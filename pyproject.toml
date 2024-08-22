@@ -9,28 +9,26 @@ requires-python = ">=3.8"
 readme = "README.md"
 license = { text = "MIT" }
 classifiers = [
-  "Intended Audience :: Developers",
-  "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
-  "Programming Language :: JavaScript",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Internet :: WWW/HTTP",
-  "Topic :: Scientific/Engineering",
-  "Topic :: Software Development",
-  "Topic :: Software Development :: Libraries :: Python Modules",
-  "Topic :: Utilities",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: JavaScript",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
 ]
 keywords = ["data", "deep learning", "javascript", "ndarray", "numpy", "tensor"]
-dependencies = [
-    "numpy",
-]
+dependencies = ["numpy"]
 dynamic = ["version"]
 
 [project.urls]
@@ -47,8 +45,8 @@ distribution = true
 
 [tool.pdm.build]
 package-dir = "python"
-includes = ["npblob"]
-excludes = ["examples", "tests"]
+includes = ["python/npblob"]
+excludes = ["examples", "tests", "python/examples", "python/tests"]
 
 [tool.pdm.version]
 source = "file"
