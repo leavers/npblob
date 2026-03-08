@@ -111,6 +111,15 @@ export const parseFloat16ArrayBuffer = (
   }
 };
 
+// Version and format constants
+const VERSION_V1 = 0x10; // 0001 0000 - version 1, may have extra
+const VERSION_V1_MUST_EXTRA = 0x11; // 0001 0001 - version 1, must have extra
+
+// Extra flag format: high 4 bits = 0000, low 4 bits = type
+const EXTRA_FLAG_BYTES = 0x01; // 0000 0001
+const EXTRA_FLAG_JSON = 0x02; // 0000 0010
+const EXTRA_FLAG_MSGPACK = 0x03; // 0000 0011
+
 const TypedArray = Object.getPrototypeOf(Uint8Array);
 const __DTYPE_FLAGS_DECODING: Record<number, [object, number, string]> = {
   1: [Uint8Array, 1, "uint8"],
@@ -137,6 +146,12 @@ const __DTYPE_FLAGS_ENCODING: Record<string, number> = {
   float16: 9,
   float32: 10,
   float64: 11,
+};
+
+const __EXTRA_DECODING_FLAGS: Record<number, string> = {
+  [EXTRA_FLAG_BYTES]: "bytes",
+  [EXTRA_FLAG_JSON]: "json",
+  [EXTRA_FLAG_MSGPACK]: "msgpack",
 };
 
 class IncompleteChunksError extends Error {}
@@ -208,76 +223,97 @@ const parseFromUint8ArrayChunks = (
   let chunk: Uint8Array;
   try {
     while (chunks.length > 0) {
-      chunk = splitChunks(chunks, 2);
+      // Read version byte + dtype flag + shape flag (3 bytes)
+      chunk = splitChunks(chunks, 3);
       tempChunks.push(chunk);
-      const [i0, i1] = chunk;
-      let endian, littleEndian;
-      let dType;
-      if (i0 > 0) {
+      const [versionByte, dtypeFlag, shapeFlag] = chunk;
+      
+      // Parse version byte
+      const version = (versionByte >> 4) & 0x0F;
+      if (version !== 1) {
+        throw new Error(`Unsupported version: ${version}`);
+      }
+      const extraMode = versionByte & 0x0F; // 0 = may have, 1 = must have
+      
+      // Parse dtype flag
+      let endian: "<" | ">", littleEndian: boolean;
+      let dType: number;
+      if (dtypeFlag > 0) {
         endian = "<";
         littleEndian = true;
-        dType = i0;
-      } else if (i0 < 0) {
+        dType = dtypeFlag;
+      } else if (dtypeFlag < 0) {
         endian = ">";
         littleEndian = false;
-        dType = -i0;
+        dType = -dtypeFlag;
       } else {
-        throw new Error();
+        throw new Error("Invalid dtype flag");
       }
-      if (dType === 0 || dType >= 12) {
-        throw new Error();
+      if (dType === 0 || dType > 12) {
+        throw new Error(`Invalid dtype: ${dType}`);
       }
 
       const [ArrayType, dSize, typ] = __DTYPE_FLAGS_DECODING[dType];
       const sameEndian = endian === __SYS_ENDIAN;
-      let shape;
-      let d0;
-      let e0;
-      if (i1 > 0) {
-        d0 = i1 * 2;
-        chunk = splitChunks(chunks, d0);
+      
+      // Parse shape
+      let shape: Uint16Array | Uint32Array;
+      let dataSize: number;
+      const shapeLen = shapeFlag > 0 ? shapeFlag : -shapeFlag;
+      
+      if (shapeFlag > 0) {
+        // uint16 shape
+        const shapeBytes = shapeLen * 2;
+        chunk = splitChunks(chunks, shapeBytes);
         tempChunks.push(chunk);
         if (sameEndian) {
-          shape = new Uint16Array(chunk.buffer);
+          shape = new Uint16Array(chunk.buffer, chunk.byteOffset, shapeLen);
         } else {
-          shape = new Uint16Array(i1);
-          const view = new DataView(chunk.buffer);
-          const getUint16 = view.getUint16;
-          for (let i = 0; i < i1; ++i) {
-            shape[i] = getUint16(i * 2, littleEndian);
+          shape = new Uint16Array(shapeLen);
+          const view = new DataView(chunk.buffer, chunk.byteOffset);
+          for (let i = 0; i < shapeLen; ++i) {
+            shape[i] = view.getUint16(i * 2, littleEndian);
           }
         }
-        e0 = shape.reduce((a, b) => a * b, 1) * dSize;
       } else {
-        const s = -i1;
-        d0 = s * 4;
-        chunk = splitChunks(chunks, d0);
+        // uint32 shape
+        const shapeBytes = shapeLen * 4;
+        chunk = splitChunks(chunks, shapeBytes);
         tempChunks.push(chunk);
         if (sameEndian) {
-          shape = new Uint32Array(chunk.buffer);
+          shape = new Uint32Array(chunk.buffer, chunk.byteOffset, shapeLen);
         } else {
-          shape = new Uint32Array(s);
-          const view = new DataView(chunk.buffer);
-          const getUint32 = view.getUint32;
-          for (let i = 0; i < s; ++i) {
-            shape[i] = getUint32(i * 4, littleEndian);
+          shape = new Uint32Array(shapeLen);
+          const view = new DataView(chunk.buffer, chunk.byteOffset);
+          for (let i = 0; i < shapeLen; ++i) {
+            shape[i] = view.getUint32(i * 4, littleEndian);
           }
         }
-        e0 = shape.reduce((a, b) => a * b, 1) * dSize;
       }
+      
+      dataSize = Array.from(shape).reduce((a, b) => a * b, 1) * dSize;
 
-      chunk = splitChunks(chunks, e0);
+      // Read array data
+      chunk = splitChunks(chunks, dataSize);
       tempChunks.push(chunk);
       const arr =
         Object.getPrototypeOf(ArrayType) === TypedArray
           ? new (ArrayType as { new (buffer: ArrayBufferLike): number[] })(
               chunk.buffer,
+              chunk.byteOffset,
+              dataSize / dSize,
             )
-          : (ArrayType as { (buffer: ArrayBufferLike): number[] })(
-              chunk.buffer,
+          : (ArrayType as { (buffer: ArrayBufferLike, littleEndian?: boolean): number[] })(
+              chunk.slice().buffer,
+              littleEndian,
             );
 
+      // Check if we have more data for extra or next array
       if (chunks.length === 0) {
+        // No more data - validate extraMode
+        if (extraMode === 0x01) {
+          throw new IncompleteChunksError("Expected extra data but stream ended");
+        }
         result.push([
           {
             shape: Array.from(shape),
@@ -289,10 +325,14 @@ const parseFromUint8ArrayChunks = (
         break;
       }
 
-      chunk = splitChunks(chunks, 1);
-      tempChunks.push(chunk);
-      const eFlag = chunk[0];
-      if (eFlag === 0) {
+      // Peek at next byte to determine if it's extra flag or new array
+      // We need to look without consuming yet
+      const nextByte = chunks[0][0];
+      const nextByteHigh = (nextByte >> 4) & 0x0F;
+      
+      if (nextByte === 0x00) {
+        // This is a separator between arrays
+        splitChunks(chunks, 1); // consume the separator
         result.push([
           {
             shape: Array.from(shape),
@@ -301,43 +341,84 @@ const parseFromUint8ArrayChunks = (
           },
           null,
         ]);
+        tempChunks.length = 0;
         continue;
-      }
+      } else if (nextByteHigh === 0x00 && nextByte !== 0x00) {
+        // This is an extra flag: 0000 ffff (where ffff != 0000)
+        chunk = splitChunks(chunks, 1);
+        tempChunks.push(chunk);
+        const eFlag = chunk[0];
+        
+        const extraType = eFlag & 0x0F;
+        const extraEncoding = __EXTRA_DECODING_FLAGS[extraType];
+        if (!extraEncoding) {
+          throw new Error(`Unknown extra flag: ${eFlag}`);
+        }
 
-      chunk = splitChunks(chunks, 4);
-      tempChunks.push(chunk);
+        // Read extra length (4 bytes)
+        chunk = splitChunks(chunks, 4);
+        tempChunks.push(chunk);
+        const eLen = new DataView(chunk.buffer, chunk.byteOffset).getUint32(0, littleEndian);
+        
+        // Read extra data
+        chunk = splitChunks(chunks, eLen);
+        tempChunks.push(chunk);
+        
+        let extra: object;
+        switch (extraEncoding) {
+          case "bytes":
+            extra = chunk.slice().buffer;
+            break;
+          case "json":
+            extra = JSON.parse(new TextDecoder().decode(chunk));
+            break;
+          case "msgpack":
+            throw new Error("msgpack not implemented");
+          default:
+            throw new Error(`Unknown extra encoding: ${extraEncoding}`);
+        }
 
-      const eLen = new DataView(chunk.buffer).getUint32(0, littleEndian);
-      chunk = splitChunks(chunks, eLen);
-      tempChunks.push(chunk);
-      let extra: object;
-      switch (eFlag) {
-        case 1:
-          extra = chunk.buffer;
+        result.push([
+          {
+            shape: Array.from(shape),
+            dType: typ as DType,
+            data: arr as unknown as NDArrayData,
+          },
+          extra,
+        ]);
+        tempChunks.length = 0;
+
+        // Check for separator (null byte) indicating more arrays
+        if (chunks.length > 0 && chunks[0][0] === 0) {
+          splitChunks(chunks, 1);
+          continue;
+        } else {
           break;
-        case 2:
-          extra = JSON.parse(new TextDecoder().decode(chunk));
-          break;
-        case 3: // placeholder for msgpack
-        default:
-          throw new Error();
-      }
-
-      result.push([
-        {
-          shape: Array.from(shape),
-          dType: typ as DType,
-          data: arr as unknown as NDArrayData,
-        },
-        extra,
-      ]);
-      tempChunks.length = 0;
-
-      if (chunks.length > 0 && chunks[0][0] === 0) {
-        splitChunks(chunks, 1);
+        }
+      } else if (nextByteHigh === 0x01) {
+        // Next byte is a version byte (new array starts)
+        if (extraMode === 0x01) {
+          throw new Error("Expected extra data but found new array");
+        }
+        result.push([
+          {
+            shape: Array.from(shape),
+            dType: typ as DType,
+            data: arr as unknown as NDArrayData,
+          },
+          null,
+        ]);
+        tempChunks.length = 0;
+        // Don't consume the version byte - it will be processed in next iteration
         continue;
       } else {
-        break;
+        // Unknown byte - could be incomplete data or corruption
+        if (extraMode === 0x01) {
+          throw new IncompleteChunksError("Expected extra data");
+        }
+        // For extraMode === 0, we might have incomplete data
+        // Push back temp chunks and wait for more data
+        throw new IncompleteChunksError("Incomplete data or unknown format");
       }
     }
   } catch (e) {
@@ -412,6 +493,21 @@ const streamFromReadableStream = (
             while (nes.length > 0) {
               controller.enqueue(nes.shift()!);
             }
+            return;
+          }
+          // Stream ended but no arrays parsed - try one more time to parse remaining chunks
+          if (streamDone) {
+            for (const ne of parseFromUint8ArrayChunks(chunks)) {
+              nes.push(ne);
+            }
+            if (nes.length > 0) {
+              while (nes.length > 0) {
+                controller.enqueue(nes.shift()!);
+              }
+              return;
+            }
+            // No more arrays and stream ended - close
+            controller.close();
             return;
           }
         } else {
@@ -523,13 +619,14 @@ function encode(
   }
   const blobComponents: Array<
     [
-      number,
-      number,
-      Uint16Array | Uint32Array,
-      NDArrayData,
-      number,
-      number,
-      Uint8Array | null,
+      number, // version byte
+      number, // dtype flag
+      number, // shape flag
+      Uint16Array | Uint32Array, // shape array
+      NDArrayData, // data
+      number, // extra encoding (0 = none)
+      number, // extra length
+      Uint8Array | null, // extra array
     ]
   > = [];
 
@@ -541,12 +638,16 @@ function encode(
       throw new Error();
     }
 
-    const i0 = littleEndian ? dType : -dType;
-    const i1 = shape.length;
-    if (i1 > 128) {
+    // Version byte: 0001 vvvv where vvvv is extra mode
+    // 0000 = may have extra, 0001 = must have extra
+    const versionByte = extra ? VERSION_V1_MUST_EXTRA : VERSION_V1;
+    
+    const dtypeFlag = littleEndian ? dType : -dType;
+    const shapeLen = shape.length;
+    if (shapeLen > 128) {
       throw new Error();
     }
-    blobLength += 2;
+    blobLength += 3; // version + dtype + shape_len
 
     let bigShape: boolean;
     let shapeArray: Uint16Array | Uint32Array;
@@ -572,29 +673,31 @@ function encode(
       let extraEncoding: number;
       if (extra instanceof ArrayBuffer) {
         extraArray = new Uint8Array(extra);
-        extraEncoding = 1;
+        extraEncoding = EXTRA_FLAG_BYTES;
       } else if (extra instanceof Uint8Array) {
         extraArray = extra;
-        extraEncoding = 1;
+        extraEncoding = EXTRA_FLAG_BYTES;
       } else {
         const extraString = JSON.stringify(extra);
         extraArray = textEncoder.encode(extraString);
-        extraEncoding = 2;
+        extraEncoding = EXTRA_FLAG_JSON;
       }
-      blobLength += 5 + extraArray.byteLength;
+      blobLength += 5 + extraArray.byteLength; // flag(1) + len(4) + data
       blobComponents.push([
-        i0,
-        bigShape ? -i1 : i1,
+        versionByte,
+        dtypeFlag,
+        bigShape ? -shapeLen : shapeLen,
         shapeArray,
         data,
         extraEncoding,
-        extraArray ? extraArray.byteLength : 0,
+        extraArray.byteLength,
         extraArray,
       ]);
     } else {
       blobComponents.push([
-        i0,
-        bigShape ? -i1 : i1,
+        versionByte,
+        dtypeFlag,
+        bigShape ? -shapeLen : shapeLen,
         shapeArray,
         data,
         0,
@@ -608,17 +711,25 @@ function encode(
   const blob = new Uint8Array(blobLength + numBlobComponents - 1);
   let offset = 0;
   for (let i = 0; i < numBlobComponents; ++i) {
-    const [i0, i1, shapeArray, data, extraEncoding, extraLength, extraArray] =
+    const [versionByte, dtypeFlag, shapeFlag, shapeArray, data, extraEncoding, extraLength, extraArray] =
       blobComponents[i];
 
     if (i > 0) {
-      blob[offset] = 0;
+      blob[offset] = 0; // separator
       offset += 1;
     }
 
-    blob[offset] = i0;
-    blob[offset + 1] = i1;
-    offset += 2;
+    // Write version byte
+    blob[offset] = versionByte;
+    offset += 1;
+    
+    // Write dtype flag
+    blob[offset] = dtypeFlag;
+    offset += 1;
+    
+    // Write shape flag
+    blob[offset] = shapeFlag;
+    offset += 1;
 
     if (sameEndian) {
       blob.set(new Uint8Array(shapeArray.buffer), offset);
@@ -653,6 +764,7 @@ function encode(
         throw new Error();
       }
 
+      // Extra flag: high 4 bits = 0000, low 4 bits = type
       blob[offset] = extraEncoding;
       offset += 1;
       const extraLengthArray = new DataView(

@@ -26,6 +26,15 @@ EndianType = t.Literal["<", ">", "="]
 ExtraEncodingType = t.Literal["bytes", "json", "msgpack"]
 MatExtraPair = t.Tuple[np.ndarray, t.Any]
 
+# Version and format constants
+VERSION_V1 = 0x10  # 0001 0000 - version 1, may have extra
+VERSION_V1_MUST_EXTRA = 0x11  # 0001 0001 - version 1, must have extra
+
+# Extra flag format: high 4 bits = 0000, low 4 bits = type
+EXTRA_FLAG_BYTES = 0x01  # 0000 0001
+EXTRA_FLAG_JSON = 0x02  # 0000 0010
+EXTRA_FLAG_MSGPACK = 0x03  # 0000 0011
+
 _DTYPE_FLAGS_ENCODING = {
     "u1": 1,
     "u2": 2,
@@ -55,19 +64,18 @@ _DTYPE_FLAGS_DECODING = {
     12: "f16",
 }
 _EXTRA_ENCODING_FLAGS = {
-    "bytes": 1,
-    "json": 2,
-    "msgpack": 3,
+    "bytes": EXTRA_FLAG_BYTES,
+    "json": EXTRA_FLAG_JSON,
+    "msgpack": EXTRA_FLAG_MSGPACK,
 }
 _EXTRA_DECODING_FLAGS = {
-    1: "bytes",
-    2: "json",
-    3: "msgpack",
+    EXTRA_FLAG_BYTES: "bytes",
+    EXTRA_FLAG_JSON: "json",
+    EXTRA_FLAG_MSGPACK: "msgpack",
 }
 
 
-class MsgpackBytes(bytes):
-    ...
+class MsgpackBytes(bytes): ...
 
 
 def _encode(
@@ -107,6 +115,15 @@ def _encode(
 
     bfmt = "<b"  # for single byte, "<b" and ">b" are the same
     blob = bytearray()
+
+    # Version byte: high 4 bits = 0001 (v1), low 4 bits = extra mode
+    # 0000 = may have extra, 0001 = must have extra
+    if extra is not None:
+        version_byte = VERSION_V1_MUST_EXTRA
+    else:
+        version_byte = VERSION_V1
+    blob += pack(bfmt, version_byte)
+
     blob += pack(bfmt, dtype_flag)
     blob += pack(bfmt, -shape_size if big_shape else shape_size)
     blob += np.array(shape, dtype=shape_dtype).tobytes()
@@ -139,8 +156,7 @@ def encode(
     extra: t.Any = None,
     *more_mat_extra_pairs: t.Union[np.ndarray, t.Any],
     endian: EndianType = "=",
-) -> bytes:
-    ...
+) -> bytes: ...
 
 
 @t.overload
@@ -148,8 +164,7 @@ def encode(
     mat_extra_pair: MatExtraPair,
     *more_mat_extra_pairs: MatExtraPair,
     endian: EndianType = "=",
-) -> bytes:
-    ...
+) -> bytes: ...
 
 
 def encode(*args, endian: EndianType = "=", **kwargs) -> bytes:
@@ -208,11 +223,18 @@ def encode(*args, endian: EndianType = "=", **kwargs) -> bytes:
 
 
 def decode(blob: bytes) -> t.List[MatExtraPair]:
-    """Parse little-endian numpy array blob"""
+    """Parse numpy array blob with version header"""
     result: t.List[t.Tuple[np.ndarray, t.Any]] = []
     bfmt = "<b"  # for single byte, "<b" and ">b" are the same
     while blob:
-        i0 = unpack(bfmt, blob[0:1])[0]
+        # Parse version byte
+        version_byte = unpack(bfmt, blob[0:1])[0]
+        version = (version_byte >> 4) & 0x0F
+        if version != 1:
+            raise ValueError(f"Unsupported version: {version}")
+        extra_mode = version_byte & 0x0F  # 0 = may have, 1 = must have
+
+        i0 = unpack(bfmt, blob[1:2])[0]
         if i0 > 0:
             endian = "<"
             dtype_flag = i0
@@ -220,51 +242,69 @@ def decode(blob: bytes) -> t.List[MatExtraPair]:
             endian = ">"
             dtype_flag = -i0
         else:
-            raise ValueError()
+            raise ValueError("Invalid dtype flag")
         dtype = np.dtype(f"{endian}{_DTYPE_FLAGS_DECODING[dtype_flag]}")
 
-        i1 = unpack(bfmt, blob[1:2])[0]
+        i1 = unpack(bfmt, blob[2:3])[0]
         if i1 > 0:
             shape_dtype = f"{endian}u2"
             shape_size = i1
-            d0 = 2 + (shape_size * 2)
+            d0 = 3 + (shape_size * 2)
         elif i1 < 0:
             shape_dtype = f"{endian}u4"
             shape_size = -i1
-            d0 = 2 + (shape_size * 4)
+            d0 = 3 + (shape_size * 4)
         else:
-            raise ValueError()
+            raise ValueError("Invalid shape flag")
 
-        shape = np.frombuffer(blob[2:d0], dtype=shape_dtype)
+        shape = np.frombuffer(blob[3:d0], dtype=shape_dtype)
         e0 = d0 + dtype.alignment * np.prod(shape, dtype=int)
         arr = np.frombuffer(blob[d0:e0], dtype=dtype).reshape(shape)
 
         if e0 >= len(blob):
+            # No more data
+            if extra_mode == 0x01:
+                raise ValueError("Expected extra data but found none")
             result.append((arr, None))
             break
 
-        e1 = e0 + 1
-        extra_flag = unpack(bfmt, blob[e0:e1])[0]
-        if extra_flag == 0:
+        # Check if next byte is extra flag or new array
+        next_byte = unpack(bfmt, blob[e0 : e0 + 1])[0]
+        next_byte_high = (next_byte >> 4) & 0x0F
+
+        if next_byte_high == 0x00:
+            # This is an extra flag (format: 0000 ffff)
+            extra_flag = next_byte
+            e1 = e0 + 1
+            extra_encoding = _EXTRA_DECODING_FLAGS.get(extra_flag)
+            if extra_encoding is None:
+                raise ValueError(f"Unknown extra flag: {extra_flag}")
+            e2 = e1 + 4
+            elen = unpack(f"{endian}L", blob[e1:e2])[0]
+            e3 = e2 + elen
+            if extra_encoding == "bytes":
+                extra = blob[e2:e3]
+            elif extra_encoding == "json":
+                extra = json_loadb(blob[e2:e3])
+            elif extra_encoding == "msgpack":
+                raise NotImplementedError("msgpack not implemented")
+
+            result.append((arr, extra))
+
+            # Check for separator (null byte)
+            if e3 < len(blob) and blob[e3] == 0:
+                blob = blob[e3 + 1 :]
+                continue
+            break
+        else:
+            # No extra data, next byte starts a new array
+            if extra_mode == 0x01:
+                raise ValueError("Expected extra data but found new array")
             result.append((arr, None))
-            blob = blob[e1:]
+            # next_byte should be a version byte (0x10 or 0x11)
+            if next_byte_high != 0x01:
+                raise ValueError(f"Expected version byte, got: {next_byte}")
+            blob = blob[e0:]
             continue
-        extra_encoding = _EXTRA_DECODING_FLAGS[extra_flag]
-        e2 = e1 + 4
-        elen = unpack(f"{endian}L", blob[e0 + 1 : e2])[0]
-        e3 = e2 + elen
-        if extra_encoding == "bytes":
-            extra = blob[e2:e3]
-        elif extra_encoding == "json":
-            extra = json_loadb(blob[e2:e3])
-        elif extra_encoding == "msgpack":
-            raise NotImplementedError()
-
-        result.append((arr, extra))
-
-        if e3 < len(blob) and blob[e3] == 0:
-            blob = blob[e3 + 1 :]
-            continue
-        break
 
     return result
