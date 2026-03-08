@@ -1,61 +1,196 @@
 import os
+import re
+import sys
+from functools import lru_cache
+from tomllib import load
+from typing import Any, Dict
 
 import nox
+from nox import Session
 from nox.command import CommandFailed
-from nox.sessions import Session
-
-SHELL_COMPLETION_DESC = """
-# Shell Completion
-
-- Bash:
-  `eval "$(register-python-argcomplete nox)"`
-- Zsh:
-  ``` shell
-  # To activate completions for zsh you need to have
-  # bashcompinit enabled in zsh:
-  autoload -U bashcompinit
-  bashcompinit
-
-  # Afterwards you can enable completion for Nox:
-  eval "$(register-python-argcomplete nox)"
-  ```
-
-For more shells refer to:
-[Shell Completion](https://nox.thea.codes/en/stable/usage.html#shell-completion)
-"""
-WORKING_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-class chdir:
-    def __init__(self, path: str):
-        self.path = path
-
-    def __enter__(self):
-        self.cwd = os.getcwd()
-        os.chdir(self.path)
-
-    def __exit__(self, *_):
-        os.chdir(self.cwd)
+os.environ.update({"PDM_IGNORE_SAVED_PYTHON": "1"})
 
 
-@nox.session(venv_backend="none")
+@lru_cache(maxsize=1)
+def get_pyproject_toml() -> Dict[str, Any]:
+    with open("pyproject.toml", mode="rb") as fp:
+        return load(fp)
+
+
+@lru_cache(maxsize=1)
+def get_python_version() -> str:
+    pyproject = get_pyproject_toml()
+    if m := re.search(r">=\s*(\d+(\.\d+)*)", pyproject["project"]["requires-python"]):
+        return m.group(1)
+    else:
+        return f"{sys.version_info.major}.{sys.version_info.minor}"
+
+
+@lru_cache(maxsize=1)
+def get_dev_dependencies() -> Dict[str, str]:
+    pyproject = get_pyproject_toml()
+    pat = re.compile(r"[ <>~=]")
+    dev_deps: Dict[str, str] = {}
+    for dep in pyproject["dependency-groups"]["dev"]:
+        sep = -1
+        for m in pat.finditer(dep):
+            sep = m.span()[0]
+            break
+        if sep == -1:
+            dev_deps[dep] = dep
+        else:
+            dev_deps[dep[:sep]] = dep
+    return dev_deps
+
+
+PYTHON_VERSION = get_python_version()
+AUTOFLAKE_VERSION = get_dev_dependencies()["autoflake"]
+ISORT_VERSION = get_dev_dependencies()["isort"]
+TY_VERSION = get_dev_dependencies()["ty"]
+RUFF_VERSION = get_dev_dependencies()["ruff"]
+SOURCES = ["npblob", "tests", "noxfile.py"]
+
+
+@nox.session(python=False)
 def shell_completion(session: Session):
-    session.run("echo", SHELL_COMPLETION_DESC, silent=True)
+    shell = os.getenv("SHELL")
+    if shell is None or "bash" in shell:
+        session.log('eval "$(register-python-argcomplete nox)"')
+    elif "zsh" in shell:
+        session.log("autoload -U bashcompinit")
+        session.log("bashcompinit")
+        session.log('eval "$(register-python-argcomplete nox)"')
+    elif "tcsh" in shell:
+        session.log("eval `register-python-argcomplete --shell tcsh nox`")
+    elif "fish" in shell:
+        session.log("register-python-argcomplete --shell fish nox | .")
+    else:
+        session.log('eval "$(register-python-argcomplete nox)"')
 
 
-@nox.session(venv_backend="none")
-def format(session: Session):
+@nox.session(python=False)
+def clean(session: Session):
+    session.run(
+        "rm",
+        "-rf",
+        ".mypy_cache",
+        ".pytest_cache",
+        "build",
+        "dist",
+        "html_cov",
+        ".nox",
+        external=True,
+    )
+    session.run(
+        "sh",
+        "-c",
+        "find . | grep -E '(__pycache__|\\.pyc|\\.pyo$$)' | xargs rm -rf",
+        external=True,
+    )
+
+
+@nox.session(python=PYTHON_VERSION, reuse_venv=True)
+@nox.parametrize("autoflake", [AUTOFLAKE_VERSION])
+@nox.parametrize("isort", [ISORT_VERSION])
+@nox.parametrize("ruff", [RUFF_VERSION])
+def format(session: Session, autoflake: str, isort: str, ruff: str):
+    session.install(autoflake, isort, ruff)
     try:
-        session.run("taplo", "fmt", "pyproject.toml")
+        session.run("taplo", "fmt", "pyproject.toml", external=True)
     except CommandFailed:
         session.warn(
-            "Seems that `taplo` is not found, skip formatting pyproject.toml. "
+            "Seems that `taplo` is not found, skip formatting `pyproject.toml`. "
             "(Refer to https://taplo.tamasfe.dev/ for information on how to install "
             "`taplo`)"
         )
+    session.run("autoflake", "--version")
+    session.run("autoflake", *SOURCES)
+    session.run("isort", "--version")
+    session.run("isort", *SOURCES)
+    session.run("ruff", "--version")
+    session.run("ruff", "format", *SOURCES)
 
-    items = ["npblob", "tests", "noxfile.py"]
 
-    session.run("autoflake", *items)
-    session.run("isort", *items)
-    session.run("ruff", "format", *items)
+@nox.session(python=PYTHON_VERSION, reuse_venv=True)
+@nox.parametrize("autoflake", [AUTOFLAKE_VERSION])
+@nox.parametrize("isort", [ISORT_VERSION])
+@nox.parametrize("ruff", [RUFF_VERSION])
+def format_check(session: Session, autoflake: str, isort: str, ruff: str):
+    session.install(autoflake, isort, ruff)
+    try:
+        session.run("taplo", "check", "pyproject.toml", external=True)
+    except CommandFailed:
+        session.warn(
+            "Seems that `taplo` is not found, skip checking `pyproject.toml`. "
+            "(Refer to https://taplo.tamasfe.dev/ for information on how to install "
+            "`taplo`)"
+        )
+    session.run("autoflake", "--version")
+    session.run("autoflake", "--check-diff", *SOURCES)
+    session.run("isort", "--version")
+    session.run("isort", "--check-only", "--diff", *SOURCES)
+    session.run("ruff", "--version")
+    session.run("ruff", "format", "--check", "--diff", *SOURCES)
+
+
+@nox.session(python=PYTHON_VERSION, reuse_venv=True)
+@nox.parametrize("ty", [TY_VERSION])
+def ty(session: Session, ty: str):
+    session.install(ty, "numpy")
+    session.run("ty", "--version")
+    session.run("ty", "check", "npblob")
+
+
+@nox.session(python=False)
+def test(session: Session):
+    session.run(
+        "pytest",
+        "--cov",
+        "npblob",
+        "--cov-report",
+        "term-missing",
+        "--cov-report",
+        "html:.nox/htmlcov",
+        "--cov-report",
+        "xml:.nox/coverage.xml",
+        "--cov-config",
+        "pyproject.toml",
+        "tests",
+    )
+
+
+@nox.session(reuse_venv=True)
+def test_for_ci(session: Session):
+    session.install(
+        "coverage[toml]",
+        "pytest",
+        "pytest-cov",
+        "numpy",
+    )
+    test(session)
+
+
+@nox.session(python=["3.9", "3.10", "3.11", "3.12", "3.13"], reuse_venv=True)
+def test_all(session: Session):
+    session.install(
+        "coverage[toml]",
+        "pytest",
+        "pytest-cov",
+        "numpy",
+    )
+    session.run(
+        "pytest",
+        "--cov",
+        "npblob",
+        "--cov-report",
+        "term-missing",
+        "--cov-report",
+        "html:.nox/htmlcov",
+        "--cov-report",
+        "xml:.nox/coverage.xml",
+        "--cov-config",
+        "pyproject.toml",
+        "tests",
+    )
